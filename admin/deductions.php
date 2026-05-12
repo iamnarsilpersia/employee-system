@@ -3,74 +3,9 @@ session_start();
 include('../includes/dbconn.php');
 include('../includes/functions.php');
 
-if(strlen($_SESSION['alogin'])==0){   
+if(empty($_SESSION['alogin'])) {   
     header('location:../index.php');
     exit();
-}
-
-$msg = "";
-$error = "";
-
-// Create tables if not exist
-try {
-    $dbh->exec("CREATE TABLE IF NOT EXISTS deduction_rates (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        type VARCHAR(50) NOT NULL UNIQUE,
-        rate DECIMAL(10,2) NOT NULL DEFAULT 0,
-        is_percentage TINYINT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )");
-    
-    // Insert default values if empty
-    $check = $dbh->query("SELECT COUNT(*) FROM deduction_rates");
-    if($check->fetchColumn() == 0) {
-        $dbh->exec("INSERT INTO deduction_rates (type, rate, is_percentage) VALUES 
-            ('SSS', 0, 1),
-            ('PhilHealth', 0, 1),
-            ('Pag-IBIG', 0, 1),
-            ('Withholding Tax', 0, 1)");
-    }
-} catch(PDOException $e) {
-    // Tables may already exist
-}
-
-// Update deduction rates
-if(isset($_POST['update_rates'])){
-    $sss_rate = floatval($_POST['sss_rate']);
-    $philhealth_rate = floatval($_POST['philhealth_rate']);
-    $pagibig_rate = floatval($_POST['pagibig_rate']);
-    $tax_rate = floatval($_POST['tax_rate']);
-    
-    try {
-        $dbh->beginTransaction();
-        
-        $stmt = $dbh->prepare("UPDATE deduction_rates SET rate=? WHERE type='SSS'");
-        $stmt->execute([$sss_rate]);
-        
-        $stmt = $dbh->prepare("UPDATE deduction_rates SET rate=? WHERE type='PhilHealth'");
-        $stmt->execute([$philhealth_rate]);
-        
-        $stmt = $dbh->prepare("UPDATE deduction_rates SET rate=? WHERE type='Pag-IBIG'");
-        $stmt->execute([$pagibig_rate]);
-        
-        $stmt = $dbh->prepare("UPDATE deduction_rates SET rate=? WHERE type='Withholding Tax'");
-        $stmt->execute([$tax_rate]);
-        
-        $dbh->commit();
-        $msg = "Deduction rates updated successfully!";
-    } catch(Exception $e) {
-        $dbh->rollBack();
-        $error = "Error updating rates: " . $e->getMessage();
-    }
-}
-
-// Load current rates
-$sql = "SELECT * FROM deduction_rates";
-$query = $dbh->prepare($sql);
-$query->execute();
-$rates = [];
-while($row = $query->fetch(PDO::FETCH_OBJ)){
-    $rates[$row->type] = $row->rate;
 }
 
 $page='payroll'; 
@@ -97,43 +32,66 @@ include('../includes/admin-header.php');
 
     <div class="main-content-inner">
         <div class="row">
-            <div class="col-lg-6 col-ml-12">
+            <div class="col-lg-8 col-md-10">
                 <div class="card">
                     <div class="card-body">
-                        <?php if($error){?><div class="alert alert-danger alert-dismissible fade show"><strong>Error: </strong><?php echo htmlentities($error); ?>
-                            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-                                <span aria-hidden="true">&times;</span>
-                            </button>
-                         </div><?php } 
-                         else if($msg){?><div class="alert alert-success alert-dismissible fade show"><strong>Success: </strong><?php echo htmlentities($msg); ?> 
-                            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-                                <span aria-hidden="true">&times;</span>
-                            </button>
-                         </div><?php }?>
+                        <div class="alert alert-info">
+                            <h5><i class="fas fa-info-circle"></i> Philippine Standard Deductions</h5>
+                            <p class="mb-0">Deductions are now automatically calculated based on Philippine labor standards (TRAIN Law). Admin no longer needs to set percentage rates manually.</p>
+                        </div>
+                        
+                        <h5 class="mt-4 mb-3">Current Contribution Rates</h5>
+                        <table class="table table-bordered">
+                            <thead class="bg-primary text-white">
+                                <tr>
+                                    <th>Deduction Type</th>
+                                    <th>Description</th>
+                                    <th>Rate Applied</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>SSS</strong></td>
+                                    <td>Social Security System Employee Contribution</td>
+                                    <td>Based on monthly salary bracket</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>PhilHealth</strong></td>
+                                    <td>National Health Insurance Program</td>
+                                    <td>4.5% of monthly salary (max ₱4,500)</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Pag-IBIG</strong></td>
+                                    <td>Home Development Mutual Fund</td>
+                                    <td>1% (≤₱1,500 salary) or 2% (≥₱1,500 salary), max ₱100</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Withholding Tax</strong></td>
+                                    <td>Income Tax (TRAIN Law Brackets)</td>
+                                    <td>Based on annual taxable income</td>
+                                </tr>
+                            </tbody>
+                        </table>
 
-                        <form method="POST">
-                            <div class="form-group">
-                                <label>SSS Rate (%)</label>
-                                <input type="number" step="0.01" name="sss_rate" value="<?php echo isset($rates['SSS']) ? $rates['SSS'] : 0; ?>" class="form-control">
-                            </div>
-
-                            <div class="form-group">
-                                <label>PhilHealth Rate (%)</label>
-                                <input type="number" step="0.01" name="philhealth_rate" value="<?php echo isset($rates['PhilHealth']) ? $rates['PhilHealth'] : 0; ?>" class="form-control">
-                            </div>
-
-                            <div class="form-group">
-                                <label>Pag-IBIG Rate (%)</label>
-                                <input type="number" step="0.01" name="pagibig_rate" value="<?php echo isset($rates['Pag-IBIG']) ? $rates['Pag-IBIG'] : 0; ?>" class="form-control">
-                            </div>
-
-                            <div class="form-group">
-                                <label>Withholding Tax Rate (%)</label>
-                                <input type="number" step="0.01" name="tax_rate" value="<?php echo isset($rates['Withholding Tax']) ? $rates['Withholding Tax'] : 0; ?>" class="form-control">
-                            </div>
-
-                            <button class="btn btn-primary" name="update_rates" type="submit">UPDATE RATES</button>
-                        </form>
+                        <h5 class="mt-4 mb-3">Tax Brackets (TRAIN Law)</h5>
+                        <table class="table table-sm table-striped">
+                            <thead class="bg-secondary text-white">
+                                <tr>
+                                    <th>Annual Taxable Income</th>
+                                    <th>Tax Rate</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>₱0 - ₱20,000</td><td>0%</td></tr>
+                                <tr><td>₱20,001 - ₱30,000</td><td>20% of excess over ₱20,000</td></tr>
+                                <tr><td>₱30,001 - ₱40,000</td><td>₱2,000 + 25% of excess</td></tr>
+                                <tr><td>₱40,001 - ₱80,000</td><td>₱4,500 + 30% of excess</td></tr>
+                                <tr><td>₱80,001 - ₱130,000</td><td>₱16,500 + 30% of excess</td></tr>
+                                <tr><td>₱130,001 - ₱250,000</td><td>₱31,500 + 32% of excess</td></tr>
+                                <tr><td>₱250,001 - ₱500,000</td><td>₱69,500 + 35% of excess</td></tr>
+                                <tr><td>₱500,001+</td><td>₱157,500 + 35% of excess</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>

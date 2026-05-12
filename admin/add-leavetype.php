@@ -9,10 +9,12 @@
     if(isset($_POST['add'])){
     $leavetype=$_POST['leavetype'];
     $description=$_POST['description'];
-    $sql="INSERT INTO tblleavetype(LeaveType,Description) VALUES(:leavetype,:description)";
+    $maxPerMonth = intval($_POST['max_per_month']);
+    $sql="INSERT INTO tblleavetype(LeaveType,Description,max_per_month) VALUES(:leavetype,:description,:max)";
     $query = $dbh->prepare($sql);
     $query->bindParam(':leavetype',$leavetype,PDO::PARAM_STR);
     $query->bindParam(':description',$description,PDO::PARAM_STR);
+    $query->bindParam(':max',$maxPerMonth,PDO::PARAM_INT);
     $query->execute();
     $lastInsertId = $dbh->lastInsertId();
 
@@ -64,6 +66,12 @@
                                             <label for="example-text-input" class="col-form-label">Short Description</label>
                                             <input class="form-control" name="description" type="text" autocomplete="off" required id="example-text-input" required>
                                                 
+                                        </div>
+
+                                        <div class="form-group">
+                                            <label for="example-text-input" class="col-form-label">Max Submissions per Month (0 = Unlimited)</label>
+                                            <input class="form-control" name="max_per_month" type="number" min="0" value="0" id="example-text-input">
+                                            <small class="text-muted">Set to 0 for unlimited submissions</small>
                                         </div>
 
                                         <button class="btn btn-primary" name="add" id="add" type="submit">ADD</button>

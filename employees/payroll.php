@@ -1,9 +1,5 @@
 <?php
 session_start();
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-// Prevent browser caching
 header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
@@ -11,128 +7,38 @@ header("Expires: Sat, 26 Jul 1997 05:00:00 GMT");
 
 include('../includes/dbconn.php');
 include('../includes/config.php');
+include('../includes/functions.php');
 
-if(strlen($_SESSION['emplogin'])==0){
-    header('location:../index.php');
-    exit;
-}
+require_employee_login();
 
-$eid = $_SESSION['eid'];
 $empid = $_SESSION['emplogin'];
 $msg = $error = "";
 
-// Create tbltime_logs table if not exists
-$dbh->exec("CREATE TABLE IF NOT EXISTS tbltime_logs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    EmpID VARCHAR(50) NOT NULL,
-    DateWorked DATE NOT NULL,
-    TimeIn TIME NULL,
-    TimeOut TIME NULL,
-    HoursWorked DECIMAL(10,2) DEFAULT 0,
-    Status VARCHAR(20) DEFAULT 'Pending',
-    INDEX (EmpID),
-    INDEX (DateWorked)
-)");
+initialize_database_tables($dbh);
 
-// Handle time in/out
 if(isset($_POST['time_action'])) {
     $action = $_POST['action'];
-    $today = date('Y-m-d');
-    
+    $result = null;
+
     if($action == 'time_in') {
-        // Check if already timed in today
-        $sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked=:date ORDER BY id DESC LIMIT 1";
-        $query = $dbh->prepare($sql);
-        $query->bindParam(':empid', $empid, PDO::PARAM_STR);
-        $query->bindParam(':date', $today, PDO::PARAM_STR);
-        $query->execute();
-        $existing = $query->fetch(PDO::FETCH_OBJ);
-        
-        // Check if can time in (either no record, or 8 hours have passed since last TimeIn)
-        $canTimeIn = true;
-        if($existing) {
-            if($existing->TimeOut == NULL) {
-                $canTimeIn = false;
-                $error = "You are already timed in. Please time out first.";
-            } else {
-                // Check if 8 hours have passed since TimeIn
-                $timeInTs = strtotime($existing->TimeIn);
-                $timeOutTs = strtotime($existing->TimeOut);
-                $eightHoursLater = $timeInTs + (8 * 3600);
-                
-                if(time() < $eightHoursLater) {
-                    $canTimeIn = false;
-                    $remaining = ceil(($eightHoursLater - time()) / 60);
-                    $error = "You must wait " . $remaining . " more minutes before you can time in again.";
-                }
-            }
-        }
-        
-        if($canTimeIn) {
-            $timeIn = date('H:i:s');
-            $sql = "INSERT INTO tbltime_logs (EmpID, DateWorked, TimeIn, Status) VALUES(:empid, :date, :timein, 'Pending')";
-            $query = $dbh->prepare($sql);
-            $query->bindParam(':empid', $empid, PDO::PARAM_STR);
-            $query->bindParam(':date', $today, PDO::PARAM_STR);
-            $query->bindParam(':timein', $timeIn, PDO::PARAM_STR);
-            $query->execute();
-            
-            if($query->rowCount() > 0) {
-                $msg = "Time In recorded at " . date('h:i A', strtotime($timeIn));
-            } else {
-                $error = "Failed to record Time In. Please try again.";
-            }
-        }
-    } elseif($action == 'time_out' || $action == 'time_out_anyway') {
-        $sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked=:date ORDER BY id DESC LIMIT 1";
-        $query = $dbh->prepare($sql);
-        $query->bindParam(':empid', $empid, PDO::PARAM_STR);
-        $query->bindParam(':date', $today, PDO::PARAM_STR);
-        $query->execute();
-        $record = $query->fetch(PDO::FETCH_OBJ);
-        
-        if($record) {
-            if($record->TimeOut != NULL) {
-                $error = "You have already timed out today.";
-            } else {
-                $timeOut = date('H:i:s');
-                if($record->TimeIn) {
-                    $timeIn = strtotime($record->TimeIn);
-                    $timeOutTs = strtotime($timeOut);
-                    $hoursWorked = round(($timeOutTs - $timeIn) / 3600, 2);
-                } else {
-                    $hoursWorked = 0;
-                }
-                
-                $sql = "UPDATE tbltime_logs SET TimeOut=:timeout, HoursWorked=:hours WHERE id=:id";
-                $query = $dbh->prepare($sql);
-                $query->bindParam(':timeout', $timeOut, PDO::PARAM_STR);
-                $query->bindParam(':hours', $hoursWorked, PDO::PARAM_STR);
-                $query->bindParam(':id', $record->id, PDO::PARAM_INT);
-                $query->execute();
-                
-                if($query->rowCount() > 0) {
-                    $msg = "Time Out recorded at " . date('h:i A', strtotime($timeOut)) . ". Hours worked: " . $hoursWorked;
-                } else {
-                    $error = "Failed to record Time Out. Please try again.";
-                }
-            }
+        $result = time_in($dbh, $empid);
+    } elseif($action == 'time_out') {
+        $result = time_out($dbh, $empid, false);
+    } elseif($action == 'time_out_anyway') {
+        $result = time_out($dbh, $empid, true);
+    }
+
+    if($result) {
+        if($result['success']) {
+            $msg = $result['message'];
         } else {
-            $error = "No Time In record found for today.";
+            $error = $result['message'];
         }
     }
 }
 
-// Get today's record
-$today = date('Y-m-d');
-$sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked=:date ORDER BY id DESC LIMIT 1";
-$query = $dbh->prepare($sql);
-$query->bindParam(':empid', $empid, PDO::PARAM_STR);
-$query->bindParam(':date', $today, PDO::PARAM_STR);
-$query->execute();
-$todayRecord = $query->fetch(PDO::FETCH_OBJ);
+$todayRecord = get_today_time_record($dbh, $empid);
 
-// Calculate button states
 $canTimeIn = true;
 $canTimeOut = false;
 $canTimeOutAnyway = true;
@@ -141,11 +47,8 @@ $eightHoursPassed = false;
 
 if($todayRecord) {
     if($todayRecord->TimeOut == NULL) {
-        // Currently timed in
         $canTimeIn = false;
         $canTimeOutAnyway = true;
-        
-        // Check if 8 hours have passed
         if($todayRecord->TimeIn) {
             $timeInTimestamp = strtotime($todayRecord->TimeIn);
             $eightHoursLater = $timeInTimestamp + (8 * 3600);
@@ -155,11 +58,8 @@ if($todayRecord) {
             }
         }
     } else {
-        // Already timed out
         $canTimeOut = false;
         $canTimeOutAnyway = false;
-        
-        // Check if 8 hours have passed since TimeIn (can time in again)
         if($todayRecord->TimeIn) {
             $timeInTimestamp = strtotime($todayRecord->TimeIn);
             $eightHoursLater = $timeInTimestamp + (8 * 3600);
@@ -170,55 +70,23 @@ if($todayRecord) {
     }
 }
 
-// Month filter for salary/attendance
 $month = isset($_GET['month']) ? intval($_GET['month']) : date('m');
 $year = isset($_GET['year']) ? intval($_GET['year']) : date('Y');
-$from = date("Y-m-01", strtotime("$year-$month-01"));
-$to = date("Y-m-t", strtotime($from));
 
-// Get monthly records
-$sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked BETWEEN :f AND :t ORDER BY DateWorked DESC";
-$query = $dbh->prepare($sql);
-$query->bindParam(':empid', $empid, PDO::PARAM_STR);
-$query->bindParam(':f', $from);
-$query->bindParam(':t', $to);
-$query->execute();
-$records = $query->fetchAll(PDO::FETCH_OBJ);
+$records = get_monthly_time_records($dbh, $empid, $month, $year);
+$payroll = calculate_payroll($records, DAILY_RATE);
+$total_hours = $payroll['total_hours'];
+$total_pay = $payroll['total_pay'];
 
-// Calculate totals
-$total_hours = 0;
-$total_pay = 0;
-foreach($records as $row){
-    $pay = ($row->HoursWorked * DAILY_RATE) / 8;
-    $total_hours += $row->HoursWorked;
-    $total_pay += $pay;
-}
+$monthly_gross = $total_pay;
+$payroll_details = calculate_employee_payroll($monthly_gross, DAILY_RATE);
 
-// Get deduction rates from database (set by admin as percentages)
-$sss_rate = 0;
-$philhealth_rate = 0;
-$pagibig_rate = 0;
-$tax_rate = 0;
-
-try {
-    $deductions = $dbh->query("SELECT * FROM deduction_rates")->fetchAll(PDO::FETCH_OBJ);
-    foreach($deductions as $d){
-        if($d->type == 'SSS') $sss_rate = $d->rate;
-        if($d->type == 'PhilHealth') $philhealth_rate = $d->rate;
-        if($d->type == 'Pag-IBIG') $pagibig_rate = $d->rate;
-        if($d->type == 'Withholding Tax') $tax_rate = $d->rate;
-    }
-} catch (Exception $e) {
-    // Use default values (0%)
-}
-
-// Calculate deductions as percentages of gross pay
-$sss = $total_pay * ($sss_rate / 100);
-$philhealth = $total_pay * ($philhealth_rate / 100);
-$pagibig = $total_pay * ($pagibig_rate / 100);
-$tax = $total_pay * ($tax_rate / 100);
-$total_deductions = $sss + $philhealth + $pagibig + $tax;
-$net_pay = $total_pay - $total_deductions;
+$sss = $payroll_details['sss'];
+$philhealth = $payroll_details['philhealth'];
+$pagibig = $payroll_details['pagibig'];
+$tax = $payroll_details['withholding_tax'];
+$total_deductions = $payroll_details['total_deductions'];
+$net_pay = $payroll_details['net_pay'];
 
 $page='payroll';
 include('../includes/employee-header.php');
@@ -231,15 +99,20 @@ include('../includes/employee-header.php');
                 <div class="card-body">
                     <h4 class="header-title mb-3"><i class="ti-money text-primary"></i> Payroll Dashboard</h4>
                     
-                    <!-- Alerts -->
-                    <?php if($error){ ?><div class="alert alert-danger alert-dismissible fade show"><strong>Error: </strong><?php echo htmlentities($error); ?>
+                    <?php if($error){ ?>
+                    <div class="alert alert-danger alert-dismissible fade show">
+                        <strong>Error: </strong> <?php echo htmlentities($error); ?>
                         <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    </div><?php } ?>
-                    <?php if($msg){ ?><div class="alert alert-success alert-dismissible fade show"><strong>Success: </strong><?php echo htmlentities($msg); ?>
+                    </div>
+                    <?php } ?>
+                    
+                    <?php if($msg){ ?>
+                    <div class="alert alert-success alert-dismissible fade show">
+                        <strong>Success: </strong> <?php echo htmlentities($msg); ?>
                         <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    </div><?php } ?>
+                    </div>
+                    <?php } ?>
 
-                    <!-- Summary Cards Row -->
                     <div class="row mb-4">
                         <div class="col-md-3">
                             <div class="card bg-light-primary">
@@ -285,7 +158,6 @@ include('../includes/employee-header.php');
                         </div>
                     </div>
 
-                    <!-- Tabs -->
                     <ul class="nav nav-pills mb-4" id="payrollTab" role="tablist">
                         <li class="nav-item">
                             <a class="nav-link active" id="time-tab" data-toggle="pill" href="#time" role="tab">
@@ -315,7 +187,6 @@ include('../includes/employee-header.php');
                     </ul>
 
                     <div class="tab-content" id="payrollTabContent">
-                        <!-- Time In/Out Tab -->
                         <div class="tab-pane fade show active" id="time" role="tabpanel">
                             <div class="row">
                                 <div class="col-lg-6" style="margin:auto;">
@@ -371,7 +242,6 @@ include('../includes/employee-header.php');
                             </div>
                         </div>
 
-                        <!-- Today's Attendance Tab -->
                         <div class="tab-pane fade" id="today" role="tabpanel">
                             <div class="card">
                                 <div class="card-body">
@@ -383,7 +253,7 @@ include('../includes/employee-header.php');
                                                     <tr><td><strong>Time In</strong></td><td><?php echo date('h:i A', strtotime($todayRecord->TimeIn)); ?></td></tr>
                                                     <tr><td><strong>Time Out</strong></td><td><?php echo $todayRecord->TimeOut ? date('h:i A', strtotime($todayRecord->TimeOut)) : '<span class="text-warning">Not yet</span>'; ?></td></tr>
                                                     <tr><td><strong>Hours Worked</strong></td><td><?php echo $todayRecord->HoursWorked ? round($todayRecord->HoursWorked, 2) . ' hrs' : '<span class="text-warning">In progress</span>'; ?></td></tr>
-                                                    <tr><td><strong>Status</strong></td><td><span class="badge badge-<?php echo $todayRecord->Status=='Approved'?'success':'warning'; ?>"><?php echo $todayRecord->Status; ?></span></td></tr>
+                                                    <tr><td><strong>Status</strong></td><td><span class="badge badge-<?php echo $todayRecord->Status=='Approved'?'success':'warning'; ?>"><?php echo sanitize_input($todayRecord->Status); ?></span></td></tr>
                                                     <tr><td><strong>Daily Pay</strong></td><td>₱<?php echo number_format(($todayRecord->HoursWorked * DAILY_RATE) / 8, 2); ?></td></tr>
                                                 </table>
                                             </div>
@@ -408,7 +278,6 @@ include('../includes/employee-header.php');
                             </div>
                         </div>
 
-                        <!-- Monthly Salary Tab -->
                         <div class="tab-pane fade" id="salary" role="tabpanel">
                             <div class="card">
                                 <div class="card-body">
@@ -440,12 +309,12 @@ include('../includes/employee-header.php');
                                                 <tr><td>Gross Pay (₱<?php echo DAILY_RATE; ?>/day)</td><td>₱<?php echo number_format($total_pay, 2); ?></td></tr>
                                             </table>
 
-                                            <h5 class="mt-4">Deductions (based on admin settings)</h5>
+                                            <h5 class="mt-4">Deductions (Philippine Standards)</h5>
                                             <table class="table table-bordered">
-                                                <tr><td>SSS (<?php echo $sss_rate; ?>%)</td><td>₱<?php echo number_format($sss, 2); ?></td></tr>
-                                                <tr><td>PhilHealth (<?php echo $philhealth_rate; ?>%)</td><td>₱<?php echo number_format($philhealth, 2); ?></td></tr>
-                                                <tr><td>Pag-IBIG (<?php echo $pagibig_rate; ?>%)</td><td>₱<?php echo number_format($pagibig, 2); ?></td></tr>
-                                                <tr><td>Withholding Tax (<?php echo $tax_rate; ?>%)</td><td>₱<?php echo number_format($tax, 2); ?></td></tr>
+                                                <tr><td>SSS Contribution</td><td>₱<?php echo number_format($sss, 2); ?></td></tr>
+                                                <tr><td>PhilHealth</td><td>₱<?php echo number_format($philhealth, 2); ?></td></tr>
+                                                <tr><td>Pag-IBIG</td><td>₱<?php echo number_format($pagibig, 2); ?></td></tr>
+                                                <tr><td>Withholding Tax (TRAIN Law)</td><td>₱<?php echo number_format($tax, 2); ?></td></tr>
                                                 <tr class="bg-light"><th>Total Deductions</th><th>₱<?php echo number_format($total_deductions, 2); ?></th></tr>
                                             </table>
                                         </div>
@@ -471,11 +340,15 @@ include('../includes/employee-header.php');
                             </div>
                         </div>
 
-                        <!-- Payslip Tab -->
                         <div class="tab-pane fade" id="payslip" role="tabpanel">
                             <div class="card">
                                 <div class="card-body">
-                                    <h4 class="header-title">My Payslip - <?php echo date('F Y', strtotime("$year-$month-01")); ?></h4>
+                                    <div class="d-flex justify-content-between align-items-center mb-4">
+                                        <h4 class="header-title">My Payslip - <?php echo date('F Y', strtotime("$year-$month-01")); ?></h4>
+                                        <button onclick="window.print()" class="btn btn-success">
+                                            <i class="fa fa-print"></i> Print Payslip
+                                        </button>
+                                    </div>
                                     
                                     <form method="GET" class="form-inline mb-4">
                                         <input type="hidden" name="tab" value="payslip">
@@ -530,12 +403,12 @@ include('../includes/employee-header.php');
 
                                     <div class="row mt-4">
                                         <div class="col-md-6">
-                                            <h5>Deductions (based on admin settings)</h5>
+                                            <h5>Deductions</h5>
                                             <table class="table table-sm">
-                                                <tr><td>SSS (<?php echo $sss_rate; ?>%)</td><td>₱<?php echo number_format($sss, 2); ?></td></tr>
-                                                <tr><td>PhilHealth (<?php echo $philhealth_rate; ?>%)</td><td>₱<?php echo number_format($philhealth, 2); ?></td></tr>
-                                                <tr><td>Pag-IBIG (<?php echo $pagibig_rate; ?>%)</td><td>₱<?php echo number_format($pagibig, 2); ?></td></tr>
-                                                <tr><td>Withholding Tax (<?php echo $tax_rate; ?>%)</td><td>₱<?php echo number_format($tax, 2); ?></td></tr>
+                                                <tr><td>SSS</td><td>₱<?php echo number_format($sss, 2); ?></td></tr>
+                                                <tr><td>PhilHealth</td><td>₱<?php echo number_format($philhealth, 2); ?></td></tr>
+                                                <tr><td>Pag-IBIG</td><td>₱<?php echo number_format($pagibig, 2); ?></td></tr>
+                                                <tr><td>Withholding Tax</td><td>₱<?php echo number_format($tax, 2); ?></td></tr>
                                                 <tr class="bg-light"><th>Total Deductions</th><th>₱<?php echo number_format($total_deductions, 2); ?></th></tr>
                                             </table>
                                         </div>
@@ -552,7 +425,6 @@ include('../includes/employee-header.php');
                             </div>
                         </div>
 
-                        <!-- Attendance Record Tab -->
                         <div class="tab-pane fade" id="record" role="tabpanel">
                             <div class="card">
                                 <div class="card-body">
@@ -602,7 +474,7 @@ include('../includes/employee-header.php');
                                                             <?php } elseif($row->Status == 'Pending'){ ?>
                                                                 <span class="badge badge-warning">Pending</span>
                                                             <?php } else { ?>
-                                                                <span class="badge badge-danger"><?php echo $row->Status; ?></span>
+                                                                <span class="badge badge-danger"><?php echo sanitize_input($row->Status); ?></span>
                                                             <?php } ?>
                                                         </td>
                                                         <td>₱<?php echo number_format($pay, 2); ?></td>
@@ -629,14 +501,12 @@ include('../includes/employee-header.php');
 </div>
 
 <script>
-// Update current time
 setInterval(function() {
     var now = new Date();
     var time = now.toLocaleTimeString('en-US', {hour12: true});
     document.getElementById('currentTime').textContent = time;
 }, 1000);
 
-// Countdown timer for TIME OUT button
 <?php if($todayRecord && $todayRecord->TimeOut == NULL && $timeInTimestamp > 0) { ?>
 var timeInTimestamp = <?php echo $timeInTimestamp * 1000; ?>;
 var eightHoursLater = timeInTimestamp + (8 * 60 * 60 * 1000);
@@ -668,16 +538,13 @@ function updateCountdown() {
 updateCountdown();
 <?php } ?>
 
-// Handle tab persistence via URL
 $(document).ready(function(){
-    // Check if there's a tab parameter in URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const tab = urlParams.get('tab');
+    var urlParams = new URLSearchParams(window.location.search);
+    var tab = urlParams.get('tab');
     if(tab) {
         $('#payrollTab a[href="#' + tab + '"]').tab('show');
     }
     
-    // Update URL when tab changes
     $('#payrollTab a').on('shown.bs.tab', function (e) {
         var tabId = $(e.target).attr('href').substring(1);
         if(history.replaceState) {
@@ -685,7 +552,6 @@ $(document).ready(function(){
         }
     });
     
-    // Initialize DataTable for attendance record (if library is loaded)
     if(typeof $.fn.DataTable !== 'undefined' && $('#attendanceTable').length) {
         $('#attendanceTable').DataTable({
             "pageLength": 10,
@@ -694,5 +560,25 @@ $(document).ready(function(){
     }
 });
 </script>
+
+<style>
+@media print {
+    body { background: white !important; }
+    .metismenu, .main-footer, .alert, .breadcrumbs, .page-title-area,
+    .employee-header, nav, .sidebar, .main-sidebar, .header-area,
+    #payrollTab, .form-inline, .nav-pills, .ti-money, .ti-calendar,
+    .col-md-3, .bg-light-primary, .bg-light-success, .bg-light-info, .bg-light-danger,
+    .tab-content > .tab-pane:not(.show), .tab-content > .tab-pane {
+        display: none !important;
+    }
+    .main-content-inner { padding: 0 !important; margin: 0 !important; }
+    .main-panel { padding: 0 !important; }
+    .card { border: 2px solid #333 !important; box-shadow: none !important; margin: 0 !important; }
+    .tab-content { display: block !important; }
+    .tab-pane { display: none !important; }
+    .tab-pane#payslip { display: block !important; }
+    #payslip .card { page-break-inside: avoid; }
+}
+</style>
 
 <?php include '../includes/employee-footer.php'; ?>

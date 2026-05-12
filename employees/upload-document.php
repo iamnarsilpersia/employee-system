@@ -1,66 +1,40 @@
 <?php
 session_start();
-error_reporting(E_ALL);
 include('../includes/dbconn.php');
+include('../includes/functions.php');
 
-if(strlen($_SESSION['emplogin'])==0){   
-    header('location:../index.php');
-    exit;
-}
+require_employee_login();
 
 $eid = $_SESSION['eid'];
 $msg = $error = "";
 
-// Create tables if not exist
-$dbh->exec("CREATE TABLE IF NOT EXISTS tbl_document_types (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    type_name VARCHAR(100) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)");
+initialize_database_tables($dbh);
 
-$dbh->exec("CREATE TABLE IF NOT EXISTS tbl_employee_documents (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    emp_id INT NOT NULL,
-    doc_type_id INT NOT NULL,
-    file_name VARCHAR(255) NOT NULL,
-    original_name VARCHAR(255) NOT NULL,
-    description TEXT,
-    uploaded_on DATETIME DEFAULT CURRENT_TIMESTAMP,
-    INDEX (emp_id)
-)");
-
-// Insert default document types if empty
-$check = $dbh->query("SELECT COUNT(*) FROM tbl_document_types")->fetchColumn();
-if($check == 0) {
-    $dbh->exec("INSERT INTO tbl_document_types (type_name) VALUES 
-        ('Resume/CV'),
-        ('Diploma'),
-        ('Birth Certificate'),
-        ('Government ID'),
-        ('Tax Documents'),
-        ('Other')");
-}
-
-// Fetch document types
 $docTypes = $dbh->query("SELECT * FROM tbl_document_types ORDER BY type_name")->fetchAll(PDO::FETCH_OBJ);
 
-// Handle upload
 if(isset($_POST['upload'])){
-    $doc_type = $_POST['doc_type'];
-    $description = $_POST['description'];
+    $doc_type = intval($_POST['doc_type']);
+    $description = sanitize_input($_POST['description']);
     
-    if(!empty($_FILES['document']['name'])){
+    if(empty($doc_type)) {
+        $error = "Please select a document type.";
+    } elseif(!empty($_FILES['document']['name'])) {
         $file_name = $_FILES['document']['name'];
         $file_tmp = $_FILES['document']['tmp_name'];
+        $file_size = $_FILES['document']['size'];
         $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
         $allowed = array('pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx');
         
-        if(in_array($file_ext, $allowed)){
+        if(!in_array($file_ext, $allowed)) {
+            $error = "Invalid file type. Allowed: PDF, JPG, PNG, DOC, DOCX";
+        } elseif($file_size > 5242880) {
+            $error = "File size must be less than 5MB.";
+        } else {
             $new_filename = $eid . '_' . time() . '.' . $file_ext;
             $upload_path = '../uploads/documents/' . $new_filename;
             
             if(!is_dir('../uploads/documents/')){
-                mkdir('../uploads/documents/', 0777, true);
+                mkdir('../uploads/documents/', 0755, true);
             }
             
             if(move_uploaded_file($file_tmp, $upload_path)){
@@ -81,14 +55,21 @@ if(isset($_POST['upload'])){
             } else {
                 $error = "Failed to upload file.";
             }
-        } else {
-            $error = "Invalid file type. Allowed: PDF, JPG, PNG, DOC, DOCX";
         }
     } else {
         $error = "Please select a file to upload.";
     }
 }
+
+$sql = "SELECT d.*, t.type_name FROM tbl_employee_documents d 
+        LEFT JOIN tbl_document_types t ON d.doc_type_id = t.id 
+        WHERE d.emp_id=:eid ORDER BY d.uploaded_on DESC";
+$query = $dbh->prepare($sql);
+$query->bindParam(':eid', $eid, PDO::PARAM_INT);
+$query->execute();
+$docs = $query->fetchAll(PDO::FETCH_OBJ);
 ?>
+
 <?php $page='documents'; include('../includes/employee-header.php'); ?>
 
     <div class="main-content-inner">
@@ -99,8 +80,13 @@ if(isset($_POST['upload'])){
                         <h4 class="header-title">Upload Document</h4>
                         <p class="text-muted">Upload your documents with document type</p>
                         
-                        <?php if($error){?><div class="alert alert-danger"><?php echo htmlentities($error); ?></div><?php } ?>
-                        <?php if($msg){?><div class="alert alert-success"><?php echo htmlentities($msg); ?></div><?php } ?>
+                        <?php if($error){ ?>
+                        <div class="alert alert-danger"><?php echo htmlentities($error); ?></div>
+                        <?php } ?>
+                        
+                        <?php if($msg){ ?>
+                        <div class="alert alert-success"><?php echo htmlentities($msg); ?></div>
+                        <?php } ?>
                         
                         <form method="POST" enctype="multipart/form-data">
                             <div class="form-group">
@@ -120,8 +106,8 @@ if(isset($_POST['upload'])){
                             
                             <div class="form-group">
                                 <label>Select File</label>
-                                <input type="file" name="document" class="form-control" required>
-                                <small class="text-muted">Allowed: PDF, JPG, PNG, DOC, DOCX</small>
+                                <input type="file" name="document" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" required>
+                                <small class="text-muted">Allowed: PDF, JPG, PNG, DOC, DOCX (Max 5MB)</small>
                             </div>
                             
                             <button type="submit" name="upload" class="btn btn-primary">Upload Document</button>
@@ -144,20 +130,12 @@ if(isset($_POST['upload'])){
                                         <th>File Name</th>
                                         <th>Description</th>
                                         <th>Uploaded On</th>
+                                        <th>Status</th>
                                         <th>Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php
-                                    $sql = "SELECT d.*, t.type_name FROM tbl_employee_documents d 
-                                            LEFT JOIN tbl_document_types t ON d.doc_type_id = t.id 
-                                            WHERE d.emp_id=:eid ORDER BY d.uploaded_on DESC";
-                                    $query = $dbh->prepare($sql);
-                                    $query->bindParam(':eid', $eid, PDO::PARAM_INT);
-                                    $query->execute();
-                                    $docs = $query->fetchAll(PDO::FETCH_OBJ);
-                                    
-                                    if(count($docs) > 0){
+                                    <?php if(count($docs) > 0){
                                         foreach($docs as $doc){ ?>
                                             <tr>
                                                 <td><?php echo htmlentities($doc->type_name); ?></td>
@@ -165,12 +143,24 @@ if(isset($_POST['upload'])){
                                                 <td><?php echo htmlentities($doc->description); ?></td>
                                                 <td><?php echo date('M d, Y', strtotime($doc->uploaded_on)); ?></td>
                                                 <td>
-                                                    <a href="../uploads/documents/<?php echo $doc->file_name; ?>" target="_blank" class="btn btn-sm btn-info">View</a>
+                                                    <?php 
+                                                    $status = $doc->status ?? 'Pending';
+                                                    if($status == 'Approved') {
+                                                        echo '<span class="badge badge-pill badge-success">Received</span>';
+                                                    } elseif($status == 'Rejected') {
+                                                        echo '<span class="badge badge-pill badge-danger">Rejected</span>';
+                                                    } else {
+                                                        echo '<span class="badge badge-pill badge-warning">Pending</span>';
+                                                    }
+                                                    ?>
+                                                </td>
+                                                <td>
+                                                    <a href="../uploads/documents/<?php echo htmlentities($doc->file_name); ?>" target="_blank" class="btn btn-sm btn-info">View</a>
                                                 </td>
                                             </tr>
                                         <?php }
                                     } else { ?>
-                                        <tr><td colspan="5" class="text-center">No documents uploaded yet.</td></tr>
+                                        <tr><td colspan="6" class="text-center">No documents uploaded yet.</td></tr>
                                     <?php } ?>
                                 </tbody>
                             </table>

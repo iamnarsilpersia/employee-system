@@ -1,91 +1,42 @@
 <?php
 session_start();
-error_reporting(0);
 include('../includes/dbconn.php');
+include('../includes/config.php');
 include('../includes/functions.php');
 
-if(strlen($_SESSION['emplogin'])==0) {
-    header('location:../index.php');
-    exit;
-}
+require_employee_login();
 
-$empid = $_SESSION['eid'];
+$empid = $_SESSION['emplogin'];
 $msg = $error = "";
 
-// Handle time in/out
+initialize_database_tables($dbh);
+
 if(isset($_POST['time_action'])) {
     $action = $_POST['action'];
-    $today = date('Y-m-d');
+    $result = null;
 
     if($action == 'time_in') {
-        $sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked=:date";
-        $query = $dbh->prepare($sql);
-        $query->bindParam(':empid', $empid, PDO::PARAM_INT);
-        $query->bindParam(':date', $today, PDO::PARAM_STR);
-        $query->execute();
-
-        if($query->rowCount() > 0) {
-            $error = "You have already timed in today.";
-        } else {
-            $timeIn = date('H:i:s');
-            $sql = "INSERT INTO tbltime_logs (EmpID, DateWorked, TimeIn, Status) VALUES(:empid, :date, :timein, 'Pending')";
-            $query = $dbh->prepare($sql);
-            $query->bindParam(':empid', $empid, PDO::PARAM_INT);
-            $query->bindParam(':date', $today, PDO::PARAM_STR);
-            $query->bindParam(':timein', $timeIn, PDO::PARAM_STR);
-            $query->execute();
-
-            if($query->rowCount() > 0) {
-                $msg = "Time In recorded at " . date('h:i A', strtotime($timeIn));
-            } else {
-                $error = "Failed to record Time In. Please try again.";
-            }
-        }
+        $result = time_in($dbh, $empid);
     } elseif($action == 'time_out') {
-        $sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked=:date AND TimeOut IS NULL";
-        $query = $dbh->prepare($sql);
-        $query->bindParam(':empid', $empid, PDO::PARAM_INT);
-        $query->bindParam(':date', $today, PDO::PARAM_STR);
-        $query->execute();
-        $record = $query->fetch(PDO::FETCH_OBJ);
+        $result = time_out($dbh, $empid, false);
+    } elseif($action == 'time_out_anyway') {
+        $result = time_out($dbh, $empid, true);
+    }
 
-        if($record) {
-            $timeOut = date('H:i:s');
-            $timeIn = strtotime($record->TimeIn);
-            $timeOutTs = strtotime($timeOut);
-            $hoursWorked = round(($timeOutTs - $timeIn) / 3600, 2);
-
-            $sql = "UPDATE tbltime_logs SET TimeOut=:timeout, HoursWorked=:hours WHERE id=:id";
-            $query = $dbh->prepare($sql);
-            $query->bindParam(':timeout', $timeOut, PDO::PARAM_STR);
-            $query->bindParam(':hours', $hoursWorked, PDO::PARAM_STR);
-            $query->bindParam(':id', $record->id, PDO::PARAM_INT);
-            $query->execute();
-
-            if($query->rowCount() > 0) {
-                $msg = "Time Out recorded at " . date('h:i A', strtotime($timeOut)) . ". Hours worked: " . $hoursWorked;
-            } else {
-                $error = "Failed to record Time Out. Please try again.";
-            }
+    if($result) {
+        if($result['success']) {
+            $msg = $result['message'];
         } else {
-            $error = "No active Time In found for today.";
+            $error = $result['message'];
         }
     }
 }
 
-// Get today's record
-$today = date('Y-m-d');
-$sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid AND DateWorked=:date";
-$query = $dbh->prepare($sql);
-$query->bindParam(':empid', $empid, PDO::PARAM_INT);
-$query->bindParam(':date', $today, PDO::PARAM_STR);
-$query->execute();
-$todayRecord = $query->fetch(PDO::FETCH_OBJ);
+$todayRecord = get_today_time_record($dbh, $empid);
 
-// Get recent attendance
 $sql = "SELECT * FROM tbltime_logs WHERE EmpID=:empid ORDER BY DateWorked DESC LIMIT 10";
 $query = $dbh->prepare($sql);
-$query->bindParam(':empid', $empid, PDO::PARAM_INT);
+$query->bindParam(':empid', $empid, PDO::PARAM_STR);
 $query->execute();
 $attendance = $query->fetchAll(PDO::FETCH_OBJ);
 
@@ -101,13 +52,19 @@ include('../includes/employee-header.php');
                     <h4 class="header-title">Time In / Time Out</h4>
                     <p class="text-muted font-14 mb-4">Today: <?php echo date('F d, Y'); ?></p>
 
-                    <?php if($error){ ?><div class="alert alert-danger alert-dismissible fade show"><strong>Error: </strong><?php echo htmlentities($error); ?>
+                    <?php if($error){ ?>
+                    <div class="alert alert-danger alert-dismissible fade show">
+                        <strong>Error: </strong> <?php echo htmlentities($error); ?>
                         <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    </div><?php } ?>
+                    </div>
+                    <?php } ?>
 
-                    <?php if($msg){ ?><div class="alert alert-success alert-dismissible fade show"><strong>Success: </strong><?php echo htmlentities($msg); ?>
+                    <?php if($msg){ ?>
+                    <div class="alert alert-success alert-dismissible fade show">
+                        <strong>Success: </strong> <?php echo htmlentities($msg); ?>
                         <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    </div><?php } ?>
+                    </div>
+                    <?php } ?>
 
                     <form method="POST">
                         <div class="text-center mb-4">
@@ -118,7 +75,10 @@ include('../includes/employee-header.php');
                             <input type="hidden" name="action" value="time_in">
                             <button class="btn btn-success btn-lg btn-block" name="time_action" type="submit">TIME IN</button>
                         <?php } elseif($todayRecord && $todayRecord->TimeOut == NULL) { ?>
-                            <div class="alert alert-info">Timed in at: <?php echo date('h:i A', strtotime($todayRecord->TimeIn)); ?></div>
+                            <div class="alert alert-info">
+                                Timed in at: <?php echo date('h:i A', strtotime($todayRecord->TimeIn)); ?>
+                                <br>Hours Worked: <?php echo round($todayRecord->HoursWorked, 2); ?> hrs
+                            </div>
                             <input type="hidden" name="action" value="time_out">
                             <button class="btn btn-danger btn-lg btn-block" name="time_action" type="submit">TIME OUT</button>
                         <?php } ?>
@@ -131,7 +91,15 @@ include('../includes/employee-header.php');
                     <h4 class="header-title">Recent Attendance</h4>
                     <div class="table-responsive">
                         <table class="table table-striped">
-                            <thead><tr><th>Date</th><th>Time In</th><th>Time Out</th><th>Hours</th><th>Status</th></tr></thead>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Time In</th>
+                                    <th>Time Out</th>
+                                    <th>Hours</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
                             <tbody>
                                 <?php foreach($attendance as $row) { ?>
                                 <tr>
@@ -139,7 +107,7 @@ include('../includes/employee-header.php');
                                     <td><?php echo $row->TimeIn ? date('h:i A', strtotime($row->TimeIn)) : '-'; ?></td>
                                     <td><?php echo $row->TimeOut ? date('h:i A', strtotime($row->TimeOut)) : '-'; ?></td>
                                     <td><?php echo $row->HoursWorked ? $row->HoursWorked : '-'; ?></td>
-                                    <td><span class="badge badge-<?php echo $row->Status=='Approved'?'success':'warning'; ?>"><?php echo $row->Status; ?></span></td>
+                                    <td><span class="badge badge-<?php echo $row->Status=='Approved'?'success':'warning'; ?>"><?php echo sanitize_input($row->Status); ?></span></td>
                                 </tr>
                                 <?php } ?>
                             </tbody>

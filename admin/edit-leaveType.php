@@ -10,10 +10,12 @@ if(isset($_POST['update'])){
     $lid=intval($_GET['lid']);
     $leavetype=$_POST['leavetype'];
     $description=$_POST['description'];
-    $sql="UPDATE tblleavetype SET LeaveType=:leavetype,Description=:description WHERE id=:lid";
+    $maxPerMonth = intval($_POST['max_per_month']);
+    $sql="UPDATE tblleavetype SET LeaveType=:leavetype,Description=:description,max_per_month=:max WHERE id=:lid";
     $query = $dbh->prepare($sql);
     $query->bindParam(':leavetype',$leavetype,PDO::PARAM_STR);
     $query->bindParam(':description',$description,PDO::PARAM_STR);
+    $query->bindParam(':max',$maxPerMonth,PDO::PARAM_INT);
     $query->bindParam(':lid',$lid,PDO::PARAM_INT);
     $query->execute();
 
@@ -75,6 +77,12 @@ if(isset($_POST['update'])){
                                             <label for="example-text-input" class="col-form-label">Short Description</label>
                                             <input class="form-control" name="description" type="text" autocomplete="off" required id="example-text-input" value="<?php echo htmlentities($result->Description);?>" required>
                                                 
+                                        </div>
+
+                                        <div class="form-group">
+                                            <label for="example-text-input" class="col-form-label">Max Submissions per Month (0 = Unlimited)</label>
+                                            <input class="form-control" name="max_per_month" type="number" min="0" id="example-text-input" value="<?php echo isset($result->max_per_month) ? $result->max_per_month : 0; ?>">
+                                            <small class="text-muted">Set to 0 for unlimited submissions</small>
                                         </div>
 
                                         <?php }
